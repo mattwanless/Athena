@@ -67,7 +67,7 @@ int init()
    setup="DoubleMA_Breakout " + Symbol() + "_" + func_TimeFrame_Val2String(func_TimeFrame_Const2Val(Period()));
    MagicNumber=3000 + func_Symbol2Val(Symbol())*100 + func_TimeFrame_Const2Val(Period());
    
-   SendMail("DoubleMA_Breakout " + Symbol() + "_" + func_TimeFrame_Val2String(func_TimeFrame_Const2Val(Period())), "started = ",TimeCurrent( ) , "magic = ",MagicNumber);
+   SendMail("DoubleMA_Breakout " + Symbol() + "_" + func_TimeFrame_Val2String(func_TimeFrame_Const2Val(Period())), "started = "+TimeCurrent( ) + "\nmagic = "+MagicNumber);
 //----
    return(0);
   }
