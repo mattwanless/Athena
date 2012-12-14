@@ -94,16 +94,18 @@ log = logging()
 
 
 class MT4Schema(object):
+    """This is a flexible data construct to house the imported data from MT4
+    The data will come over as 'key = value'"""
     def __init__(self):
         pass
-
+    
 
 
 
 class omail(object):
     def __init__(self):
         self.headers = ('Return-Path', 'Received', 'DKIM-Signature', 'MIME-Version', 'Reply-To', 'Date', 
-                       'Message-ID', 'Subject', 'From', 'To', 'Content-Type')        
+                       'Message-ID', 'Subject', 'From', 'To', 'Content-Type','Body')        
         for x in self.headers:
             setattr(self, x, '')
 
@@ -112,27 +114,36 @@ def getMail():
     """Connects to pop server and retrieves messages"""
 
     while 1:
-
+    #if 1==1:
+        
         try:
             Mailbox = poplib.POP3(c.Server['host'], c.Server['port']) 
             Mailbox.user(c.Server['username']) 
             Mailbox.pass_(c.Server['password']) 
             numMessages = len(Mailbox.list()[1])
-
+            
+            
             log.info("Connected to %s and there are %i messages"%(c.Server['host'], numMessages))
     
             for i in range(numMessages):
                 msg = Mailbox.top(i+1, 10000)
+                #msg = Mailbox.retr(i+1) # removes messages
                 qIncomingMail.put(msg)
+                log.debug("getMail: put message %i in queue"%i)
             Mailbox.quit()
-            time.sleep(60)
+            
         except:
             log.error("Failed to connect to %s"%c.Server['host'])
-
+        time.sleep(60)        
+        
+        
 
 def getMessagefromQ():
     
-    return qIncomingMail.get()
+    if qIncomingMail.qsize() > 0:
+        return qIncomingMail.get()
+    else:
+        return None
 
 
 def messages2Obj(msg):
@@ -141,13 +152,17 @@ def messages2Obj(msg):
     htype = ''
     for x in msg[1]:
         if x.split(':')[0] in omsg.headers:
-            htype = x.split(':')[0]
+            if x.split(':')[0] <> 'Content-Type':
+                htype = x.split(':')[0]
+            else:
+                htype = 'Body'
             if len(getattr(omsg, htype)) == 0:
                 setattr(omsg, htype, x.split(':')[1:][0])
             else:
                 setattr(omsg, htype, "%s\n%s"%(getattr(omsg,htype), x.split(':')[1:][0]))
         else:
             setattr(omsg, htype, "%s\n%s"%(getattr(omsg,htype), x))
+    omsg.Body = '\n'.join(omsg.Body.split('\n')[1:])
             
     if debug:        
         for k in omsg.headers:
@@ -155,30 +170,61 @@ def messages2Obj(msg):
     
     return omsg
         
+        
+def processBody(sbody):
+
+    data = {}
+    
+    if type(sbody) <> str:
+        return None
+    if sbody.count('=') == 0:
+        return None
+    
+    for line in sbody.split('\n'):
+        if line.count(' = ') == 1:
+            k,v = line.split(' = ')
+            data[k]=v
+            
+    
+    
+    return data
+            
+        
+        
+        
 def messageProcessingFactory():
      
     while 1:
         try:
             m = getMessagefromQ()
-            om = messages2Obj(m)
-            # Now message is useful object. Process headers/body and store.
-            
-            # validate that we want to process it.
-            
-            # pull out body and objectise it.
-            
-    
-            qMessageObj.put()
-            qMessageStore.put()
-        except:
+            if m<>None:
+                om = messages2Obj(m)
+                # Now message is useful object. Process headers/body and store.
+                
+                
+                
+                # validate that we want to process it.
+                
+                # pull out body and objectise it.
+                print om.Body
+                
+                data = processBody(om.Body)
+                
+                if data <> None:
+                    qMessageObj.put(data)
+                    qMessageStore.put(data)
+        except SystemError:
             log.error("Failed to process Message: %"%m)
 ####################################
 
 if __name__ == '__main__':
     
-    p = Process(target=getMail)
-    p.start()
+    try:
+        p = Process(target=getMail)
+        p.start()
     
+        
+        messageProcessingFactory()
     
-    
-    #p.join()
+    finally:
+        p.join()
