@@ -1,31 +1,24 @@
-import ConfigParser
-import getpass, poplib
+from ConfigParser import SafeConfigParser
+from multiprocessing import Process, Queue
+import getpass
+import poplib
+import sys
+import os
+import time
 
 
 
-def logging():
-    import logging
+global debug
+debug = False
 
-    c = Config()
+global qIncomingMail
+qIncomingMail = Queue()
 
-    log = logging.getLogger('Octopus')
-    exec("log.setLevel(logging."+c.Logging['baselevel']+")")
-    # create file handler which logs even debug messages
-    fh = logging.FileHandler('./octopus.log')
-    exec("fh.setLevel(logging."+c.Logging['filelevel']+")")
-    # create console handler with a higher log level
-    ch = logging.StreamHandler()
-    exec("ch.setLevel(logging."+c.Logging['screenlevel']+")")
-    # create formatter and add it to the handlers
-    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-    ch.setFormatter(formatter)
-    fh.setFormatter(formatter)
-    # add the handlers to logger
-    log.addHandler(ch)
-    log.addHandler(fh)
+global qMessageObj
+qMessageObj = Queue()
 
-    return log
-
+global qMessageStore
+qMessageStore = Queue()
 
 
 class Config(object):
@@ -67,65 +60,45 @@ class Config(object):
 
                 getattr(self, self.parser.get(section_name, 'type')).append(section_name)
 
+global c
+c = Config()
 
 
-            for name, value in self.parser.items(section_name):
-                if debug:
-                    print '  %s = %s' % (name, value)
-                if name == 'schema':
-                    vschema = value.replace(' ', '').split(',')
-                    for i in range(len(vschema)):
-                        if len(vschema[i]) == 0:
-                            vschema[i] = 'field%i'%i
-                    value = ','.join(vschema)
-                    getattr(self, section_name)[name] = value.strip()
+def logging():
+    import logging
 
-                    # Validate the schema if schema
-                    dtype = getattr(self, section_name)['datatypes'].split(',')
-                    dtypelen = len(dtype)
-                    sch = getattr(self, section_name)['schema'].split(',')
-                    schlen = len(sch)
+    
 
-                    if dtypelen <> schlen:
-                        print """\nschema definition error in %s
-                        \nThere are %i fields in the schema. and %i datatypes defined.
-                        \nThere needs to be the same number"""%(section_name, schlen, dtypelen)
-                        for x in range(max([dtypelen,schlen])):
-                            try:
-                                print sch[x], dtype[x]
-                            except IndexError:
-                                if dtypelen > schlen:
-                                    print 'missing  ' + dtype[x]
-                                else:
-                                    print 'missing'
+    log = logging.getLogger('Octopus')
+    exec("log.setLevel(logging."+c.Logging['baselevel']+")")
+    # create file handler which logs even debug messages
+    fh = logging.FileHandler('./octopus.log')
+    exec("fh.setLevel(logging."+c.Logging['filelevel']+")")
+    # create console handler with a higher log level
+    ch = logging.StreamHandler()
+    exec("ch.setLevel(logging."+c.Logging['screenlevel']+")")
+    # create formatter and add it to the handlers
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    ch.setFormatter(formatter)
+    fh.setFormatter(formatter)
+    # add the handlers to logger
+    log.addHandler(ch)
+    log.addHandler(fh)
 
-                        raise SystemExit                    
-
-
-                if name == 'enabled' and type(value) <> bool:
-                    getattr(self, section_name)[name] = ast.literal_eval(value)
-
-
-            #if getattr(self, section_name).has_key('enabled'):
-                #if type(getattr(self, section_name)['enabled']) <> bool:
-                    #getattr(self, section_name)['enabled'] = ast.literal_eval(getattr(self, section_name)['enabled'])
-
-            #for name, value in self.parser.items(section_name):
-                #if name == 'schema':
+    return log
 
 
 
+global log
+log = logging()
+
+
+class MT4Schema(object):
+    def __init__(self):
+        pass
 
 
 
-
-
-
-
-Mailbox = poplib.POP3('mail.o2.co.uk', '110') 
-Mailbox.user(user) 
-Mailbox.pass_(password) 
-numMessages = len(Mailbox.list()[1])
 
 class omail(object):
     def __init__(self):
@@ -133,39 +106,79 @@ class omail(object):
                        'Message-ID', 'Subject', 'From', 'To', 'Content-Type')        
         for x in self.headers:
             setattr(self, x, '')
-            
-            
-for i in range(numMessages):
+
+
+def getMail():            
+    """Connects to pop server and retrieves messages"""
+
+    while 1:
+
+        try:
+            Mailbox = poplib.POP3(c.Server['host'], c.Server['port']) 
+            Mailbox.user(c.Server['username']) 
+            Mailbox.pass_(c.Server['password']) 
+            numMessages = len(Mailbox.list()[1])
+
+            log.info("Connected to %s and there are %i messages"%(c.Server['host'], numMessages))
     
-    msg = Mailbox.top(i+1, 10000)
-    dmess = {}
+            for i in range(numMessages):
+                msg = Mailbox.top(i+1, 10000)
+                qIncomingMail.put(msg)
+            Mailbox.quit()
+            time.sleep(60)
+        except:
+            log.error("Failed to connect to %s"%c.Server['host'])
+
+
+def getMessagefromQ():
     
-    #headers = ( 'Subject', 'Content-Type')
-    
+    return qIncomingMail.get()
+
+
+def messages2Obj(msg):
+
     omsg = omail()
     htype = ''
     for x in msg[1]:
         if x.split(':')[0] in omsg.headers:
             htype = x.split(':')[0]
-            setattr(omsg, htype, "%s\n%s"%(getattr(omsg,htype), x.split(':')[1:][0]))
+            if len(getattr(omsg, htype)) == 0:
+                setattr(omsg, htype, x.split(':')[1:][0])
+            else:
+                setattr(omsg, htype, "%s\n%s"%(getattr(omsg,htype), x.split(':')[1:][0]))
         else:
             setattr(omsg, htype, "%s\n%s"%(getattr(omsg,htype), x))
             
+    if debug:        
+        for k in omsg.headers:
+            print k, getattr(omsg, k)
+    
+    return omsg
+        
+def messageProcessingFactory():
+     
+    while 1:
+        try:
+            m = getMessagefromQ()
+            om = messages2Obj(m)
+            # Now message is useful object. Process headers/body and store.
             
-    for k in omsg.headers:
-        print k, getattr(omsg, k)
-        
-        
-        #print 'xx',x
-        
+            # validate that we want to process it.
+            
+            # pull out body and objectise it.
+            
     
-    # write message -> object function
-    # parse object -> exteact info.
-    # store message
-    # parse/import message
+            qMessageObj.put()
+            qMessageStore.put()
+        except:
+            log.error("Failed to process Message: %"%m)
+####################################
+
+if __name__ == '__main__':
+    
+    p = Process(target=getMail)
+    p.start()
     
     
-
-
-
-Mailbox.quit()
+    
+    #p.join()
